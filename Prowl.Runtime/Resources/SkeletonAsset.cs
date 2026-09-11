@@ -253,4 +253,77 @@ public sealed class SkeletonAsset : EngineObject, ISerializable
         }
         RebuildLookup();
     }
+
+    /// <summary>
+    /// Validates the skeleton rig definition for internal consistency.
+    /// </summary>
+    public bool Validate(out List<string> errors)
+    {
+        errors = new List<string>();
+        EnsureNotDisposed();
+
+        if (_bones.Count == 0)
+        {
+            errors.Add("SkeletonAsset has no bones defined.");
+            return false;
+        }
+
+        bool hasRoot = false;
+        var names = new HashSet<string>(StringComparer.Ordinal);
+
+        for (int i = 0; i < _bones.Count; i++)
+        {
+            var bone = _bones[i];
+            if (string.IsNullOrWhiteSpace(bone.Name))
+            {
+                errors.Add($"Bone at index {i} has an empty or null name.");
+            }
+            else if (!names.Add(bone.Name))
+            {
+                errors.Add($"Duplicate bone name '{bone.Name}' at index {i}.");
+            }
+
+            if (bone.ParentIndex < -1 || bone.ParentIndex >= _bones.Count)
+            {
+                errors.Add($"Bone '{bone.Name}' (index {i}) has invalid ParentIndex {bone.ParentIndex}.");
+            }
+            else if (bone.ParentIndex == i)
+            {
+                errors.Add($"Bone '{bone.Name}' (index {i}) cannot be its own parent.");
+            }
+            else if (bone.ParentIndex == -1)
+            {
+                hasRoot = true;
+            }
+
+            // Cycle detection
+            int current = bone.ParentIndex;
+            int visited = 0;
+            while (current >= 0 && visited <= _bones.Count)
+            {
+                if (current == i)
+                {
+                    errors.Add($"Cyclic parent hierarchy detected involving bone '{bone.Name}' (index {i}).");
+                    break;
+                }
+                current = _bones[current].ParentIndex;
+                visited++;
+            }
+        }
+
+        if (!hasRoot)
+            errors.Add("SkeletonAsset has no root bone (no bone with ParentIndex == -1).");
+
+        return errors.Count == 0;
+    }
+
+    /// <summary>
+    /// Validates the skeleton rig definition for internal consistency.
+    /// </summary>
+    public bool Validate(out string? errorMessage)
+    {
+        bool valid = Validate(out List<string> errors);
+        errorMessage = valid ? null : string.Join("; ", errors);
+        return valid;
+    }
 }

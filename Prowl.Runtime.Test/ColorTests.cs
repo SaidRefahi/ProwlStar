@@ -1,4 +1,4 @@
-﻿// This file is part of the Prowl Game Engine
+// This file is part of the Prowl Game Engine
 // Licensed under the MIT License. See the LICENSE file in the project root for details.
 
 using Prowl.Vector;
@@ -154,7 +154,16 @@ public class ColorTests
     [InlineData(0.5f, 0.5f, 0.5f, 0.5f, "RGBA(0.5, 0.5, 0.5, 0.5)")]
     public void ToString_Returns_Correct_Value(float r, float g, float b, float a, string expected)
     {
-        var color = new Color(r, g, b, a);
-        Assert.Equal(expected, color.ToString());
+        var prevCulture = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
+            var color = new Color(r, g, b, a);
+            Assert.Equal(expected, color.ToString());
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = prevCulture;
+        }
     }
 }

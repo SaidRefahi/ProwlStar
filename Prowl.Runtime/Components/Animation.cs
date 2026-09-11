@@ -6,14 +6,23 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 using Prowl.Vector;
+using Prowl.Runtime.Animation;
 
 namespace Prowl.Runtime;
 
 /// <summary>
 /// Plays AnimationClips by driving bone Transforms in the hierarchy.
-/// Simple legacy-style animation one clip at a time.
-/// Bones are found by path from the hierarchy root (e.g. "Armature/Hips/Spine").
-/// Paths match those stored in AnimationClip.AnimBone.BoneName.
+/// Supports direct playback (index-based or legacy string) and real-time humanoid retargeting.
+///
+/// When retargeting is configured (<see cref="SourceSkeleton"/>, <see cref="SourceHumanoidMapping"/>,
+/// <see cref="Skeleton"/> and <see cref="HumanoidMapping"/>), poses are retargeted from the source
+/// rig to the target rig in real-time with zero runtime GC allocations.
+///
+/// When a <see cref="Skeleton"/> is assigned without retargeting, bone resolution is index-based:
+/// a one-time binding maps clip bones → skeleton bone indices → cached Transforms.
+///
+/// When no skeleton is assigned, the legacy string-path Dictionary resolution is used
+/// for full backward compatibility.
 /// </summary>
 [AddComponentMenu("Animation/Animation")]
 [ComponentIcon("\uf008")] // Film
@@ -24,6 +33,18 @@ public class AnimationComponent : MonoBehaviour
 
     /// <summary>All available animation clips for this model.</summary>
     public List<AssetRef<AnimationClip>> Clips = new();
+
+    /// <summary>Target skeleton asset for index-based bone resolution and retargeting.</summary>
+    public AssetRef<SkeletonAsset> Skeleton;
+
+    /// <summary>Optional target humanoid mapping for humanoid retargeting.</summary>
+    public AssetRef<HumanoidMapping> HumanoidMapping;
+
+    /// <summary>Optional source skeleton asset (authoring rig of the clips) for retargeting.</summary>
+    public AssetRef<SkeletonAsset> SourceSkeleton;
+
+    /// <summary>Optional source humanoid mapping (authoring rig humanoid mapping) for retargeting.</summary>
+    public AssetRef<HumanoidMapping> SourceHumanoidMapping;
 
     /// <summary>Auto-play the default clip on enable.</summary>
     public bool PlayAutomatically = true;
@@ -40,24 +61,56 @@ public class AnimationComponent : MonoBehaviour
     /// <summary>The currently playing clip.</summary>
     [NonSerialized] public AnimationClip? CurrentClip;
 
-    // Bone path → Transform lookup (cached on first use)
-    [System.NonSerialized] private Dictionary<string, Transform>? _boneCache;
+    // ── Common sampler ──────────────────────────────────────────────────────
+    private readonly AnimationSampler _sampler = new();
+    private BonePose[] _cachedPoses = Array.Empty<BonePose>();
 
-    // Renderer-path → SkinnedMeshRenderer lookup for blend-shape tracks (cached on first use)
-    [System.NonSerialized] private Dictionary<string, SkinnedMeshRenderer?>? _blendShapeTargets;
+    // ── Retargeting state ────────────────────────────────────────────────────
+    [NonSerialized] private AnimationRetargeter? _retargeter;
+    [NonSerialized] private SkeletonAsset? _boundRetargetSourceSkeleton;
+    [NonSerialized] private HumanoidMapping? _boundRetargetSourceMapping;
+    [NonSerialized] private SkeletonAsset? _boundRetargetTargetSkeleton;
+    [NonSerialized] private HumanoidMapping? _boundRetargetTargetMapping;
+    [NonSerialized] private AnimationClip? _boundRetargetClip;
+    [NonSerialized] private Transform?[] _retargetTargetTransforms = Array.Empty<Transform?>();
+    private ClipBoneBinding[] _sourceClipBindings = Array.Empty<ClipBoneBinding>();
+    private int _sourceClipBindingCount;
+    private BonePose[] _sourceSkeletonPoses = Array.Empty<BonePose>();
 
-    // The root the bone cache (and blend-shape paths) are resolved against. A blend-shape track
-    // path of "" targets this root itself (e.g. a single-mesh model whose root is the mesh node).
-    [System.NonSerialized] private Transform? _boneCacheRoot;
+    // ── Skeleton-based direct index path (used when Skeleton is assigned) ───
+    private ClipBoneBinding[] _bindings = Array.Empty<ClipBoneBinding>();
+    private int _bindingCount;
+    [NonSerialized] private AnimationClip? _boundClip;
+    [NonSerialized] private SkeletonAsset? _boundSkeleton;
 
-    // Set when PlayAutomatically wanted to start but the clip was still streaming in (async
-    // loading); Update starts it once the clip arrives.
-    [System.NonSerialized] private bool _pendingAutoPlay;
+    // ── Legacy string-path fallback (used when no Skeleton is assigned) ─────
+    [NonSerialized] private Dictionary<string, Transform>? _boneCache;
+    [NonSerialized] private Dictionary<string, SkinnedMeshRenderer?>? _blendShapeTargets;
+    [NonSerialized] private Transform? _boneCacheRoot;
+
+    // Deferred auto-play: clip was still streaming in at OnEnable.
+    [NonSerialized] private bool _pendingAutoPlay;
+
+    // Reusable buffer for path segment splitting (avoids allocation in BuildBindings).
+    private static readonly char[] s_pathSeparator = { '/' };
 
     public override void OnEnable()
     {
-        _boneCache = null; // Force rebuild on enable
+        // Invalidate all caches on enable
+        _retargeter = null;
+        _boundRetargetSourceSkeleton = null;
+        _boundRetargetSourceMapping = null;
+        _boundRetargetTargetSkeleton = null;
+        _boundRetargetTargetMapping = null;
+        _boundRetargetClip = null;
+        _retargetTargetTransforms = Array.Empty<Transform?>();
+        _sourceClipBindingCount = 0;
+
+        _boneCache = null;
         _blendShapeTargets = null;
+        _boundClip = null;
+        _boundSkeleton = null;
+        _bindingCount = 0;
 
         if (PlayAutomatically)
         {
@@ -65,7 +118,7 @@ public class AnimationComponent : MonoBehaviour
             if (clip != null)
                 Play(clip);
             else
-                _pendingAutoPlay = true; // clip still streaming in defer to Update
+                _pendingAutoPlay = true;
         }
     }
 
@@ -142,9 +195,6 @@ public class AnimationComponent : MonoBehaviour
     /// <summary>Play a clip by name (searches the Clips list).</summary>
     public void Play(string clipName)
     {
-        // foreach over List<T> copies each element by value - .Res's caching would mutate the
-        // throwaway copy and never stick, so use CollectionsMarshal to resolve against the real
-        // backing elements (same reasoning as the DefaultClip.Res resolve above).
         var clips = CollectionsMarshal.AsSpan(Clips);
         for (int i = 0; i < clips.Length; i++)
         {
@@ -171,39 +221,389 @@ public class AnimationComponent : MonoBehaviour
     /// <summary>Resume playback from the current time.</summary>
     public void Resume() => IsPlaying = true;
 
+    // ════════════════════════════════════════════════════════════════════════
+    //  POSE APPLICATION
+    // ════════════════════════════════════════════════════════════════════════
+
     private void ApplyPose(AnimationClip clip, float time)
     {
-        EnsureBoneCache();
-        if (_boneCache == null || _boneCache.Count == 0) return;
+        // Evaluate all bone curves into the clip-indexed pose buffer
+        _sampler.Evaluate(clip, time, out _cachedPoses);
 
-        foreach (var animBone in clip.Bones)
+        if (TryEnsureRetargeting(clip))
         {
-            if (!_boneCache.TryGetValue(animBone.BoneName, out Transform? bone)) continue;
-            if (bone == null) continue;
+            // ── RETARGETED PATH: Retarget from Source Rig to Target Rig ──
+            ApplyRetargetedPose();
+        }
+        else if (TryEnsureSkeletonBindings(clip))
+        {
+            // ── DIRECT INDEX PATH: arrays only, zero string lookups ──
+            for (int i = 0; i < _bindingCount; i++)
+            {
+                ref var b = ref _bindings[i];
+                if (b.Target == null) continue;
 
-            Float3 pos = animBone.EvaluatePositionAt(time);
-            Quaternion rot = animBone.EvaluateRotationAt(time);
-            Float3 scale = animBone.EvaluateScaleAt(time);
+                var pose = _cachedPoses[b.ClipBoneIndex];
+                b.Target.LocalPosition = pose.Position;
+                b.Target.LocalRotation = pose.Rotation;
+                b.Target.LocalScale = pose.Scale;
+            }
+        }
+        else
+        {
+            // ── LEGACY PATH: string Dictionary fallback ──
+            EnsureBoneCache();
+            if (_boneCache == null || _boneCache.Count == 0) return;
 
-            bone.LocalPosition = pos;
-            bone.LocalRotation = rot;
-            bone.LocalScale = scale;
+            for (int i = 0; i < clip.Bones.Count; i++)
+            {
+                var animBone = clip.Bones[i];
+                if (!_boneCache.TryGetValue(animBone.BoneName, out Transform? bone)) continue;
+                if (bone == null) continue;
+
+                var pose = _cachedPoses[i];
+                bone.LocalPosition = pose.Position;
+                bone.LocalRotation = pose.Rotation;
+                bone.LocalScale = pose.Scale;
+            }
         }
 
         ApplyBlendShapes(clip, time);
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  RETARGETING PIPELINE
+    // ════════════════════════════════════════════════════════════════════════
+
+    private bool TryEnsureRetargeting(AnimationClip clip)
+    {
+        var srcSkel = SourceSkeleton.Res;
+        var srcMap = SourceHumanoidMapping.Res;
+        var tgtSkel = Skeleton.Res;
+        var tgtMap = HumanoidMapping.Res;
+
+        if (srcSkel == null || srcMap == null || tgtSkel == null || tgtMap == null)
+            return false;
+
+        // Rebuild retargeter if any rig configuration changed
+        if (_retargeter == null ||
+            _boundRetargetSourceSkeleton != srcSkel ||
+            _boundRetargetSourceMapping != srcMap ||
+            _boundRetargetTargetSkeleton != tgtSkel ||
+            _boundRetargetTargetMapping != tgtMap)
+        {
+            if (!HumanoidCalibration.Build(srcSkel, srcMap, out var srcCal, out _) ||
+                !HumanoidCalibration.Build(tgtSkel, tgtMap, out var tgtCal, out _) ||
+                !AnimationRetargeter.Build(srcSkel, srcMap, srcCal, tgtSkel, tgtMap, tgtCal, out _retargeter, out _))
+            {
+                _retargeter = null;
+                return false;
+            }
+
+            _boundRetargetSourceSkeleton = srcSkel;
+            _boundRetargetSourceMapping = srcMap;
+            _boundRetargetTargetSkeleton = tgtSkel;
+            _boundRetargetTargetMapping = tgtMap;
+
+            // Resolve target skeleton scene transforms
+            if (_retargetTargetTransforms.Length != tgtSkel.BoneCount)
+                _retargetTargetTransforms = new Transform?[tgtSkel.BoneCount];
+            ResolveSkeletonTransforms(tgtSkel, _retargetTargetTransforms);
+
+            // Preallocate source skeleton pose buffer
+            if (_sourceSkeletonPoses.Length != srcSkel.BoneCount)
+                _sourceSkeletonPoses = new BonePose[srcSkel.BoneCount];
+        }
+
+        // Rebuild clip bindings to source skeleton if clip changed
+        if (_boundRetargetClip != clip)
+        {
+            _boundRetargetClip = clip;
+            BuildSourceClipBindings(clip, srcSkel);
+        }
+
+        return _retargeter != null;
+    }
+
+    private void BuildSourceClipBindings(AnimationClip clip, SkeletonAsset srcSkel)
+    {
+        int clipBoneCount = clip.Bones.Count;
+        if (_sourceClipBindings.Length < clipBoneCount)
+            _sourceClipBindings = new ClipBoneBinding[clipBoneCount];
+
+        _sourceClipBindingCount = 0;
+        for (int i = 0; i < clipBoneCount; i++)
+        {
+            string bonePath = clip.Bones[i].BoneName;
+            int skelIdx = ResolveClipBoneToSkeleton(bonePath, srcSkel);
+            if (skelIdx >= 0)
+            {
+                _sourceClipBindings[_sourceClipBindingCount++] = new ClipBoneBinding
+                {
+                    ClipBoneIndex = i,
+                    SkeletonBoneIndex = skelIdx,
+                    Target = null
+                };
+            }
+        }
+    }
+
+    private void ApplyRetargetedPose()
+    {
+        if (_retargeter == null || _boundRetargetSourceSkeleton == null) return;
+
+        // 1. Initialize source skeleton pose buffer with rest poses
+        for (int i = 0; i < _sourceSkeletonPoses.Length; i++)
+        {
+            var bone = _boundRetargetSourceSkeleton[i];
+            _sourceSkeletonPoses[i] = new BonePose
+            {
+                Position = bone.LocalPosition,
+                Rotation = bone.LocalRotation,
+                Scale = bone.LocalScale
+            };
+        }
+
+        // 2. Overwrite with evaluated clip curve poses
+        for (int i = 0; i < _sourceClipBindingCount; i++)
+        {
+            ref var b = ref _sourceClipBindings[i];
+            _sourceSkeletonPoses[b.SkeletonBoneIndex] = _cachedPoses[b.ClipBoneIndex];
+        }
+
+        // 3. Retarget from source skeleton to target skeleton poses
+        _retargeter.TryRetargetPose(_sourceSkeletonPoses, out var targetPoses);
+
+        // 4. Apply target poses to cached scene transforms
+        for (int i = 0; i < targetPoses.Length; i++)
+        {
+            var targetTransform = _retargetTargetTransforms[i];
+            if (targetTransform == null) continue;
+
+            var pose = targetPoses[i];
+            targetTransform.LocalPosition = pose.Position;
+            targetTransform.LocalRotation = pose.Rotation;
+            targetTransform.LocalScale = pose.Scale;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  SKELETON BINDING (one-time, on clip/skeleton change)
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Returns true if skeleton bindings are available and current.
+    /// Rebuilds them if the clip or skeleton changed since last build.
+    /// </summary>
+    private bool TryEnsureSkeletonBindings(AnimationClip clip)
+    {
+        var skel = Skeleton.Res;
+        if (skel == null) return false;
+
+        if (_boundClip != clip || _boundSkeleton != skel)
+            BuildBindings(clip, skel);
+
+        return _bindingCount > 0;
+    }
+
+    /// <summary>
+    /// Builds the one-time binding from clip bones → skeleton bone indices → Transforms.
+    /// After this, ApplyPose uses only arrays and indices.
+    /// </summary>
+    private void BuildBindings(AnimationClip clip, SkeletonAsset skeleton)
+    {
+        _boundClip = clip;
+        _boundSkeleton = skeleton;
+
+        int clipBoneCount = clip.Bones.Count;
+        int skelBoneCount = skeleton.BoneCount;
+
+        // 1. Resolve skeleton bone index → Transform (hierarchy-aware)
+        var skelTransforms = new Transform?[skelBoneCount];
+        ResolveSkeletonTransforms(skeleton, skelTransforms);
+
+        // 2. Build clip bone → skeleton bone bindings
+        if (_bindings.Length < clipBoneCount)
+            _bindings = new ClipBoneBinding[clipBoneCount];
+        _bindingCount = 0;
+
+        for (int i = 0; i < clipBoneCount; i++)
+        {
+            string bonePath = clip.Bones[i].BoneName;
+            int skelIdx = ResolveClipBoneToSkeleton(bonePath, skeleton);
+
+            _bindings[_bindingCount] = new ClipBoneBinding
+            {
+                ClipBoneIndex = i,
+                SkeletonBoneIndex = skelIdx,
+                Target = skelIdx >= 0 ? skelTransforms[skelIdx] : null
+            };
+            _bindingCount++;
+        }
+    }
+
+    /// <summary>
+    /// Resolves each skeleton bone to its corresponding Transform in the GO hierarchy.
+    /// Processes top-down (parents before children) so children can verify their parent mapping.
+    /// </summary>
+    private void ResolveSkeletonTransforms(SkeletonAsset skeleton, Transform?[] output)
+    {
+        Transform root = FindBoneCacheRoot();
+
+        for (int i = 0; i < skeleton.BoneCount; i++)
+        {
+            var skelBone = skeleton[i];
+            Transform? searchRoot;
+
+            if (skelBone.ParentIndex >= 0 && skelBone.ParentIndex < i)
+            {
+                searchRoot = output[skelBone.ParentIndex];
+                if (searchRoot == null)
+                {
+                    output[i] = null;
+                    continue;
+                }
+            }
+            else
+            {
+                searchRoot = root;
+            }
+
+            Transform? match = null;
+            int matchCount = 0;
+            FindNamedTransform(searchRoot, skelBone.Name, skelBone.ParentIndex < 0, ref match, ref matchCount);
+
+            if (matchCount == 1)
+            {
+                output[i] = match;
+            }
+            else if (matchCount > 1)
+            {
+                Debug.LogWarning($"[Animation] Ambiguous skeleton Transform for bone '{skelBone.Name}': {matchCount} candidates found. Leaving unresolved.");
+                output[i] = null;
+            }
+            else
+            {
+                output[i] = null;
+            }
+        }
+    }
+
+    private static void FindNamedTransform(Transform searchRoot, string boneName, bool isRootBone, ref Transform? match, ref int matchCount)
+    {
+        if (isRootBone)
+        {
+            FindNamedTransformRecursive(searchRoot, boneName, ref match, ref matchCount);
+        }
+        else
+        {
+            foreach (var child in searchRoot.GameObject.Children)
+            {
+                if (child.Name == boneName)
+                {
+                    match = child.Transform;
+                    matchCount++;
+                }
+            }
+        }
+    }
+
+    private static void FindNamedTransformRecursive(Transform t, string name, ref Transform? match, ref int matchCount)
+    {
+        foreach (var child in t.GameObject.Children)
+        {
+            if (child.Name == name)
+            {
+                match = child.Transform;
+                matchCount++;
+            }
+            FindNamedTransformRecursive(child.Transform, name, ref match, ref matchCount);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  PATH RESOLUTION: AnimBone.BoneName → SkeletonAsset bone index
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Resolves a clip bone path (e.g. "Armature/Hips/Spine") to a skeleton bone index.
+    /// </summary>
+    internal static int ResolveClipBoneToSkeleton(string bonePath, SkeletonAsset skeleton)
+    {
+        if (string.IsNullOrEmpty(bonePath)) return -1;
+
+        string[] segments = bonePath.Split(s_pathSeparator, StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0) return -1;
+
+        string leafName = segments[segments.Length - 1];
+
+        int candidateCount = 0;
+        int lastCandidate = -1;
+        int exactMatchCount = 0;
+        int exactMatch = -1;
+
+        for (int i = 0; i < skeleton.BoneCount; i++)
+        {
+            if (skeleton[i].Name != leafName) continue;
+            candidateCount++;
+            lastCandidate = i;
+
+            if (VerifyPathMatch(i, segments, skeleton))
+            {
+                exactMatchCount++;
+                exactMatch = i;
+            }
+        }
+
+        if (exactMatchCount == 1) return exactMatch;
+        if (exactMatchCount > 1)
+        {
+            Debug.LogWarning($"[Animation] Multiple exact path matches for '{bonePath}' in skeleton. Leaving unbound.");
+            return -1;
+        }
+
+        if (candidateCount == 1) return lastCandidate;
+        if (candidateCount > 1)
+        {
+            Debug.LogWarning($"[Animation] Ambiguous leaf name '{leafName}' for path '{bonePath}' in skeleton ({candidateCount} candidates). Leaving unbound.");
+            return -1;
+        }
+
+        return -1;
+    }
+
+    private static bool VerifyPathMatch(int boneIndex, string[] segments, SkeletonAsset skeleton)
+    {
+        int segIdx = segments.Length - 1;
+        int current = boneIndex;
+
+        while (current >= 0 && segIdx >= 0)
+        {
+            if (skeleton[current].Name != segments[segIdx])
+                return false;
+
+            segIdx--;
+            current = skeleton.GetParentIndex(current);
+        }
+
+        return true;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  BLEND SHAPES
+    // ════════════════════════════════════════════════════════════════════════
 
     private void ApplyBlendShapes(AnimationClip clip, float time)
     {
         if (clip.BlendShapes.Count == 0) return;
         _blendShapeTargets ??= new Dictionary<string, SkinnedMeshRenderer?>();
 
+        EnsureBoneCache();
+
         foreach (var track in clip.BlendShapes)
         {
             if (!_blendShapeTargets.TryGetValue(track.Path, out SkinnedMeshRenderer? smr))
             {
-                // Resolve the renderer once. An empty path targets the cache root itself; otherwise
-                // look it up via the bone-path cache (same relative-path convention).
                 Transform? target = string.IsNullOrEmpty(track.Path)
                     ? _boneCacheRoot
                     : (_boneCache != null && _boneCache.TryGetValue(track.Path, out Transform? t) ? t : null);
@@ -214,40 +614,37 @@ public class AnimationComponent : MonoBehaviour
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    //  LEGACY BONE CACHE
+    // ════════════════════════════════════════════════════════════════════════
+
     private void EnsureBoneCache()
     {
         if (_boneCache != null) return;
         _boneCache = new Dictionary<string, Transform>();
 
-        // Find the correct search root try ancestors until bone paths resolve.
-        // This handles reparenting (model placed under another GO).
         Transform root = FindBoneCacheRoot();
         _boneCacheRoot = root;
 
-        // Cache all descendants by their relative path from root (excluding root's name)
         foreach (var child in root.GameObject.Children)
             CacheBonesRecursive(child.Transform, "");
     }
 
     private Transform FindBoneCacheRoot()
     {
-        // Walk up to absolute root
         Transform root = Transform;
         while (root.Parent != null) root = root.Parent;
 
-        // If the clip has bones, verify the first bone path resolves from this root
         var clip = CurrentClip.IsValid() ? CurrentClip : DefaultClip.Res;
         if (clip != null && clip.Bones.Count > 0)
         {
             string testPath = clip.Bones[0].BoneName;
-            // Try each ancestor from top down until the path resolves
             var ancestors = new List<Transform>();
             Transform current = Transform;
             while (current != null) { ancestors.Add(current); current = current.Parent; }
 
             for (int i = ancestors.Count - 1; i >= 0; i--)
             {
-                // Build cache from this ancestor and check if test path exists
                 foreach (var child in ancestors[i].GameObject.Children)
                 {
                     if (child.Name == testPath.Split('/')[0])
@@ -265,7 +662,6 @@ public class AnimationComponent : MonoBehaviour
             ? t.GameObject.Name
             : parentPath + "/" + t.GameObject.Name;
 
-        // Don't overwrite first occurrence wins
         _boneCache.TryAdd(path, t);
 
         foreach (var child in t.GameObject.Children)
