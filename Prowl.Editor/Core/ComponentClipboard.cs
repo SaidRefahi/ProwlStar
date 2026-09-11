@@ -149,6 +149,64 @@ public static class ComponentClipboard
     }
 
     /// <summary>
+    /// Duplicate a component onto its GameObject, with undo.
+    /// Places the duplicate directly after the source component.
+    /// </summary>
+    public static MonoBehaviour? Duplicate(MonoBehaviour comp)
+    {
+        if (comp == null || comp.GameObject.IsNotValid()) return null;
+
+        try
+        {
+            var go = comp.GameObject;
+            int? srcIndex = comp.GetSiblingIndex();
+
+            var data = Serializer.Serialize(comp.GetType(), comp, SerializeContext(comp));
+            var newComp = Serializer.Deserialize(data, comp.GetType(), DeserializeContext()) as MonoBehaviour;
+            if (newComp == null) return null;
+
+            go.AddComponent(newComp);
+            if (srcIndex.HasValue)
+                newComp.SetSiblingIndex(srcIndex.Value + 1);
+            newComp.OnValidate();
+
+            var goId = go.Identifier;
+            var newCompId = newComp.Identifier;
+            Type compType = comp.GetType();
+            EchoObject compData = data;
+            int newIndex = srcIndex.HasValue ? srcIndex.Value + 1 : (go._components.Count - 1);
+
+            Undo.RegisterAction("Duplicate Component",
+                undo: () =>
+                {
+                    GameObject g = Undo.FindGO(goId)!;
+                    if (g.IsNotValid()) return;
+                    MonoBehaviour c = g.GetComponentByIdentifier(newCompId)!;
+                    if (c.IsValid()) g.RemoveComponent(c);
+                },
+                redo: () =>
+                {
+                    GameObject g = Undo.FindGO(goId)!;
+                    if (g.IsNotValid()) return;
+                    var restored = Serializer.Deserialize(compData, compType, DeserializeContext()) as MonoBehaviour;
+                    if (restored == null) return;
+                    restored.Identifier = newCompId;
+                    g.AddComponent(restored);
+                    restored.SetSiblingIndex(newIndex);
+                    restored.OnValidate();
+                });
+
+            EditorSceneManager.MarkDirty();
+            return newComp;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Failed to duplicate component: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Overwrite <paramref name="target"/>'s field values from the clipboard, with undo. The target
     /// keeps its own identifier, GameObject and sibling index - only data is replaced. Requires the
     /// clipboard type to match exactly.

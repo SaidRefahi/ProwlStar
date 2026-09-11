@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 
 using Prowl.Editor.Core;
+using Prowl.Editor.Theming;
 using Prowl.OrigamiUI;
 using Prowl.Rosetta;
 using Prowl.Runtime;
@@ -115,18 +116,21 @@ public static class SaveManager
 
         if (labels.Count == 0)
         {
-            if (!isAutoSave)
+            if (!isAutoSave && !EditorSettings.Instance.MuteNotifications)
                 Origami.Toast(Loc.Get("save.nothing")).Message(Loc.Get("save.nothing_msg")).Info().Show();
             IsAutoSave = false;
             return;
         }
 
-        string title = isAutoSave ? Loc.Get("save.auto_saved") : Loc.Get("save.saved");
-        string message = labels.Count == 1
-            ? labels[0]
-            : string.Join(", ", labels);
+        if (!isAutoSave || !EditorSettings.Instance.MuteNotifications)
+        {
+            string title = isAutoSave ? Loc.Get("save.auto_saved") : Loc.Get("save.saved");
+            string message = labels.Count == 1
+                ? labels[0]
+                : string.Join(", ", labels);
 
-        Origami.Toast(title).Message(message).Success().Show();
+            Origami.Toast(title).Message(message).Success().Show();
+        }
         IsAutoSave = false;
     }
 

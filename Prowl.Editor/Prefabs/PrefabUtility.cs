@@ -1181,6 +1181,15 @@ public static partial class PrefabUtility
         Guid componentId = component.Identifier;
 
         Restore(defaults);
+        try
+        {
+            component.Reset();
+            defaults = Serializer.Serialize(component.GetType(), component, ComponentValueContext(component));
+        }
+        catch (Exception ex)
+        {
+            Runtime.Debug.LogError($"Error calling Reset() on {component.GetType().Name}: {ex}");
+        }
 
         Undo.RegisterAction("Reset Component",
             undo: () => Restore(before),

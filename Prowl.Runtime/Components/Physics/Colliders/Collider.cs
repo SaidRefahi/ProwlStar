@@ -1,4 +1,4 @@
-﻿// This file is part of the Prowl Game Engine
+// This file is part of the Prowl Game Engine
 // Licensed under the MIT License. See the LICENSE file in the project root for details.
 
 using System;
@@ -29,6 +29,13 @@ public abstract class Collider : MonoBehaviour
     {
         get => rotation;
         set { rotation = value; Rebuild(); }
+    }
+
+    public override void Reset()
+    {
+        base.Reset();
+        center = Float3.Zero;
+        rotation = Float3.Zero;
     }
 
     protected Float4x4 GizmoMatrix =>

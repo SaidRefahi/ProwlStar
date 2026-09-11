@@ -128,6 +128,9 @@ public class PreferencesPanel : DockPanel
         EditorGUI.SettingsToggle(paper, "pref_reimport_focus", Loc.Get("pref.reimport_focus"), s.ReimportOnFocusOnly,
             v => { s.ReimportOnFocusOnly = v; s.Save(); });
 
+        EditorGUI.SettingsToggle(paper, "pref_mute_notif", Loc.Get("pref.mute_notifications"), s.MuteNotifications,
+            v => { s.MuteNotifications = v; s.Save(); });
+
         string[] thumbOptions = ["32", "64", "128"];
         int thumbIndex = s.ThumbnailSize switch { 64 => 1, 128 => 2, _ => 0 };
         EditorGUI.SettingsRow(paper, "pref_thumb_size", Loc.Get("pref.thumbnail_size"), () =>

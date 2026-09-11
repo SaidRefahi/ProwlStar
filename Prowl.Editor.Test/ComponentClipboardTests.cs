@@ -692,4 +692,34 @@ public class ComponentClipboardTests : EditorTestHarness, IDisposable
         Assert.Same(b, dst.TargetGO);
         Assert.Same(dstTarget, dst.TargetComp);
     }
+
+    [Fact]
+    public void Duplicate_CreatesCopyDirectlyAfterSource_WithUndo()
+    {
+        MakeScene(out var a, out _);
+        var first = a.AddComponent<ClipComp>();
+        first.Value = 42;
+        first.Label = "original";
+
+        var dupe = ComponentClipboard.Duplicate(first) as ClipComp;
+        Assert.NotNull(dupe);
+        Assert.NotSame(first, dupe);
+        Assert.Equal(42, dupe.Value);
+        Assert.Equal("original", dupe.Label);
+
+        // Verify index is directly after first
+        Assert.Equal(first.GetSiblingIndex() + 1, dupe.GetSiblingIndex());
+
+        // Undo removes duplicate
+        Undo.IncrementGroup();
+        Undo.PerformUndo();
+        Assert.Null(a.GetComponentByIdentifier(dupe.Identifier));
+
+        // Redo restores duplicate
+        Undo.PerformRedo();
+        var restored = a.GetComponentByIdentifier(dupe.Identifier) as ClipComp;
+        Assert.NotNull(restored);
+        Assert.Equal(42, restored.Value);
+        Assert.Equal("original", restored.Label);
+    }
 }

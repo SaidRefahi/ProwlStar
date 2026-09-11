@@ -1,4 +1,4 @@
-﻿// This file is part of the Prowl Game Engine
+// This file is part of the Prowl Game Engine
 // Licensed under the MIT License. See the LICENSE file in the project root for details.
 
 using System;
@@ -216,9 +216,9 @@ public abstract class MonoBehaviour : EngineObject, ISerializationCallbackReceiv
     /// <inheritdoc cref="GameObject.GetComponentInChildren(Type, bool, bool)"/>"
     public MonoBehaviour? GetComponentInChildren(Type componentType, bool includeSelf = true) => GameObject.GetComponentInChildren(componentType, includeSelf);
     /// <inheritdoc cref="GameObject.GetComponentsInChildren{T}"/>"
-    public IEnumerable<T> GetComponentsInChildren<T>(bool includeSelf = true) where T : MonoBehaviour => GameObject.GetComponentsInChildren<T>(includeSelf);
+    public IEnumerable<T> GetComponentsInChildren<T>(bool includeSelf = true, bool includeInactive = false) where T : MonoBehaviour => GameObject.GetComponentsInChildren<T>(includeSelf, includeInactive);
     /// <inheritdoc cref="GameObject.GetComponentsInChildren(Type, bool, bool)"/>"
-    public IEnumerable<MonoBehaviour> GetComponentsInChildren(Type type, bool includeSelf = true) => GameObject.GetComponentsInChildren(type, includeSelf);
+    public IEnumerable<MonoBehaviour> GetComponentsInChildren(Type type, bool includeSelf = true, bool includeInactive = false) => GameObject.GetComponentsInChildren(type, includeSelf, includeInactive);
 
 
     /// <summary>
@@ -321,6 +321,11 @@ public abstract class MonoBehaviour : EngineObject, ISerializationCallbackReceiv
     #region Behaviour
 
     // Lifecycle methods
+
+    /// <summary>
+    /// Reset to default values. Called in the editor when the component is first attached or when the user chooses Reset.
+    /// </summary>
+    public virtual void Reset() { }
 
     /// <summary>
     /// Called when the GameObject is added to a Scene.

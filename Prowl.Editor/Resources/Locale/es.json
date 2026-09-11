@@ -528,5 +528,17 @@
   "editor.git_no_repo_tip": "Este proyecto no es un repositorio Git",
   "editor.git_clean": "Arbol de trabajo limpio ({{branch}})",
   "editor.git_dirty": "Cambios sin confirmar ({{branch}})",
-  "launcher.no_results": "Ningun proyecto coincide con tu busqueda"
+  "launcher.no_results": "Ningun proyecto coincide con tu busqueda",
+  "inspector.lock": "Bloquear inspector",
+  "inspector.unlock": "Desbloquear inspector",
+  "panel.new_inspector": "Nuevo inspector",
+  "collider.fit_to_mesh": "Ajustar a la Malla",
+  "pref.mute_notifications": "Silenciar notificaciones (Toasts)",
+  "inspector.duplicate_component": "Duplicar componente",
+  "inspector.move_to_top": "Mover al inicio",
+  "inspector.move_to_bottom": "Mover al final",
+  "inspector.collapse_all": "Colapsar todos",
+  "inspector.expand_all": "Expandir todos",
+  "inspector.copy_transform": "Copiar Transform",
+  "inspector.paste_transform": "Pegar Transform"
 }

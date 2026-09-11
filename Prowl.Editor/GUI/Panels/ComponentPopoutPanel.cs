@@ -82,6 +82,9 @@ public class ComponentPopoutPanel : DockPanel
 
             using (paper.Row("cpop_header").Height(28).ChildLeft(8).RowBetween(6).Enter())
             {
+                Origami.RightClickMenu(paper, "cpop_header_ctx", b =>
+                    GameObjectInspector.BuildComponentContextMenu(b, go, comp, comp.GetSiblingIndex() ?? 0));
+
                 paper.Box("cpop_icon")
                     .Width(20).Height(28)
                     .Text(icon, font).TextColor(EditorTheme.Purple400)
@@ -96,6 +99,10 @@ public class ComponentPopoutPanel : DockPanel
                     .Height(28).ChildRight(8)
                     .Text(Loc.Get("component.on", new { name = go.Name }), font).TextColor(EditorTheme.Ink400)
                     .FontSize(EditorTheme.FontSizeSmall).Alignment(TextAlignment.MiddleRight);
+
+                EditorGUI.HeaderIconButton(paper, "cpop_gear", EditorIcons.EllipsisVertical, () =>
+                    Origami.ContextMenu((float)paper.PointerPos.X, (float)paper.PointerPos.Y, b =>
+                        GameObjectInspector.BuildComponentContextMenu(b, go, comp, comp.GetSiblingIndex() ?? 0)));
             }
 
             Origami.Separator(paper, "cpop_sep").Show();

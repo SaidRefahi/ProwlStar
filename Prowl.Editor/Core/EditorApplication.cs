@@ -131,9 +131,15 @@ public class EditorApplication : Game
 
         // Cursor lock toasts
         Input.OnCursorLocked += () =>
-            Toasts.Show(Loc.Get("toast.cursor_locked"), Loc.Get("toast.cursor_locked_msg"), ToastType.Info, 3f);
+        {
+            if (!EditorSettings.Instance.MuteNotifications)
+                Toasts.Show(Loc.Get("toast.cursor_locked"), Loc.Get("toast.cursor_locked_msg"), ToastType.Info, 3f);
+        };
         Input.OnCursorLockFailed += () =>
-            Toasts.Show(Loc.Get("toast.cursor_lock_failed"), Loc.Get("toast.cursor_lock_failed_msg"), ToastType.Warning, 3f);
+        {
+            if (!EditorSettings.Instance.MuteNotifications)
+                Toasts.Show(Loc.Get("toast.cursor_lock_failed"), Loc.Get("toast.cursor_lock_failed_msg"), ToastType.Warning, 3f);
+        };
 
         RegisterMenus();
 
@@ -532,7 +538,7 @@ public class EditorApplication : Game
 
         // First-run UI tour (once per user; reset from Preferences > General).
         GUI.EditorGuide.SetDockSpace(_dockSpace);
-        if (Project.Current != null && !ProjectLauncher.IsOpen && _introTime >= IntroDuration)
+        if (Project.Current != null && !ProjectLauncher.IsOpen && _introTime >= IntroDuration && !EditorSettings.Instance.MuteNotifications)
             GUI.EditorGuide.TryAutoStart(GUI.EditorGuide.WelcomeTour());
     }
 
@@ -1420,7 +1426,11 @@ public class EditorApplication : Game
     }
 
     /// <summary>Transient toast shown while a script recompile is in progress.</summary>
-    public void NotifyCompiling() => Toasts.Show("Compiling", "Compiling scripts...", ToastType.Info, 2f);
+    public void NotifyCompiling()
+    {
+        if (!EditorSettings.Instance.MuteNotifications)
+            Toasts.Show("Compiling", "Compiling scripts...", ToastType.Info, 2f);
+    }
 
     /// <summary>Toast shown when scripts recompiled and hot reloaded successfully.</summary>
     public void NotifyScriptsReloaded(string detail) => Toasts.Success("Scripts Reloaded", detail);

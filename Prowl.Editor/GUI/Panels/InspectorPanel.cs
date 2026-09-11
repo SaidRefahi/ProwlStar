@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -21,33 +21,161 @@ public class InspectorPanel : DockPanel
     [MenuItem("Window/General/Inspector", priority: 3)]
     static void Open() => EditorApplication.Instance?.OpenPanel(typeof(InspectorPanel));
 
+    [MenuItem("Window/General/New Inspector", priority: 4)]
+    static void OpenNew() => EditorApplication.Instance?.OpenPanelInstance(new InspectorPanel(), 400, 700);
+
     public override string Title => Loc.Get("panel.inspector");
     public override string Icon => EditorIcons.Sliders;
+
+    public override float HeaderWidth => 28f;
+
+    private bool _isLocked;
+    private object? _lockedTarget;
+    private readonly List<object> _lockedSelected = new();
+
+    public bool IsLocked
+    {
+        get
+        {
+            ValidateLockLifecycle();
+            return _isLocked;
+        }
+    }
+
+    public object? InspectedTarget
+    {
+        get
+        {
+            ValidateLockLifecycle();
+            return _isLocked && _lockedTarget != null ? _lockedTarget : GetCurrentInspectable();
+        }
+    }
+
+    public IReadOnlyList<object> InspectedObjects
+    {
+        get
+        {
+            ValidateLockLifecycle();
+            return _isLocked ? _lockedSelected : Selection.Selected;
+        }
+    }
+
+    private void ValidateLockLifecycle()
+    {
+        if (_isLocked)
+        {
+            if (_lockedTarget == null ||
+                (_lockedTarget is EngineObject eo && eo.IsDisposed))
+            {
+                _isLocked = false;
+                _lockedTarget = null;
+                _lockedSelected.Clear();
+            }
+        }
+    }
 
     // Remember the last non-folder selection so navigating folders doesn't clear the inspector.
     private object? _lastInspectable;
     private bool _subscribed;
 
+    public override void OnHeaderContent(Paper paper, float width, float height)
+    {
+        var font = EditorTheme.DefaultFont;
+        if (font == null) return;
+
+        string icon = _isLocked ? EditorIcons.Lock : EditorIcons.LockOpen;
+        Color color = _isLocked ? EditorTheme.Accent : EditorTheme.Ink300;
+        Color bg = _isLocked ? EditorTheme.Selected : Color.Transparent;
+
+        paper.Box("insp_hdr_lock").Width(24).Height(24).Rounded(6)
+            .Margin(0, 0, UnitValue.StretchOne, UnitValue.StretchOne)
+            .BackgroundColor(bg)
+            .Transition(GuiProp.BackgroundColor, 0.15f)
+            .Hovered.BackgroundColor(_isLocked ? EditorTheme.Selected : EditorTheme.Hover).End()
+            .Text(icon, font).TextColor(color).FontSize(13f).Alignment(TextAlignment.MiddleCenter)
+            .Tooltip(Loc.Get(_isLocked ? "inspector.unlock" : "inspector.lock"))
+            .OnClick(_ => ToggleLock());
+    }
+
+    public void ToggleLock()
+    {
+        _isLocked = !_isLocked;
+        if (_isLocked)
+        {
+            var active = GetCurrentInspectable();
+            if (active != null)
+            {
+                _lockedTarget = active;
+                _lockedSelected.Clear();
+                if (active is GameObject)
+                {
+                    _lockedSelected.AddRange(Selection.GetSelected<GameObject>());
+                    if (!_lockedSelected.Contains(active))
+                        _lockedSelected.Add(active);
+                }
+                else
+                {
+                    _lockedSelected.AddRange(Selection.Selected);
+                    if (!_lockedSelected.Contains(active))
+                        _lockedSelected.Add(active);
+                }
+            }
+            else
+            {
+                _isLocked = false;
+                _lockedTarget = null;
+                _lockedSelected.Clear();
+            }
+        }
+        else
+        {
+            _lockedTarget = null;
+            _lockedSelected.Clear();
+            var active = Selection.ActiveObject;
+            if (active != null && !IsFolderSelection(active))
+                _lastInspectable = active;
+        }
+    }
+
+    public object? GetCurrentInspectable()
+    {
+        var active = Selection.ActiveObject;
+        if (active == null || IsFolderSelection(active))
+            active = _lastInspectable;
+        return active;
+    }
+
     public override bool SerializeState(System.Text.Json.Nodes.JsonObject state)
     {
+        state["isLocked"] = _isLocked;
+
         // Selection is global, so the Inspector is the natural owner of its persistence.
         // Only GameObjects round-trip here arbitrary objects (assets, etc.) would need
         // their own addressing scheme and currently aren't stable enough to restore.
         var arr = new System.Text.Json.Nodes.JsonArray();
-        foreach (var go in Selection.GetSelected<GameObject>())
+        var targets = _isLocked
+            ? _lockedSelected.OfType<GameObject>()
+            : Selection.GetSelected<GameObject>();
+
+        foreach (var go in targets)
             arr.Add(go.Identifier.ToString());
-        if (arr.Count == 0) return false;
+
+        if (arr.Count == 0 && !_isLocked) return false;
         state["selection"] = arr;
         return true;
     }
 
     public override void RestoreState(System.Text.Json.Nodes.JsonObject state)
     {
+        bool wasLocked = state["isLocked"]?.GetValue<bool>() ?? false;
+        if (wasLocked) _isLocked = true;
+
         if (state["selection"] is not System.Text.Json.Nodes.JsonArray arr) return;
 
         var scene = Runtime.Resources.Scene.Current;
         if (scene == null) return;
 
+        var restoredGos = new List<GameObject>();
         bool first = true;
         foreach (var node in arr)
         {
@@ -56,8 +184,20 @@ public class InspectorPanel : DockPanel
             var go = scene.FindObjectByIdentifier<GameObject>(guid);
             if (go == null) continue;
 
-            if (first) { Selection.Select(go); first = false; }
-            else Selection.AddToSelection(go);
+            restoredGos.Add(go);
+            if (!wasLocked)
+            {
+                if (first) { Selection.Select(go); first = false; }
+                else Selection.AddToSelection(go);
+            }
+        }
+
+        if (wasLocked && restoredGos.Count > 0)
+        {
+            _isLocked = true;
+            _lockedTarget = restoredGos[0];
+            _lockedSelected.Clear();
+            _lockedSelected.AddRange(restoredGos);
         }
     }
 
@@ -210,6 +350,8 @@ public class InspectorPanel : DockPanel
 
     private void OnSelectionChanged()
     {
+        if (_isLocked) return;
+
         var active = Selection.ActiveObject;
 
         // If the new selection is a folder (or all selected are folders), keep the
@@ -234,12 +376,24 @@ public class InspectorPanel : DockPanel
 
         Origami.ScrollView(paper, "insp_scroll", width, height).Padding(0, 0, 0, 0).Body(() =>
         {
-            // Determine what to inspect: current selection, unless it's a folder
-            var active = Selection.ActiveObject;
-            if (active == null || IsFolderSelection(active))
-                active = _lastInspectable;
+            // Validate locked target lifecycle: if disposed/destroyed, unlock
+            ValidateLockLifecycle();
 
-            if (Selection.Count == 0 && _lastInspectable == null)
+            // Determine what to inspect: current selection (or locked target), unless it's a folder
+            object? active;
+            if (_isLocked && _lockedTarget != null)
+            {
+                active = _lockedTarget;
+            }
+            else
+            {
+                active = Selection.ActiveObject;
+                if (active == null || IsFolderSelection(active))
+                    active = _lastInspectable;
+            }
+
+            int currentCount = _isLocked ? _lockedSelected.Count : Selection.Count;
+            if (!_isLocked && Selection.Count == 0 && _lastInspectable == null)
             {
                 DrawEmpty(paper, font, width);
                 return;
@@ -270,7 +424,10 @@ public class InspectorPanel : DockPanel
             // Draw based on type GameObject has its own header
             if (active is GameObject gameObject)
             {
-                var gos = Selection.GetSelected<GameObject>().ToList();
+                var gos = _isLocked
+                    ? _lockedSelected.OfType<GameObject>().ToList()
+                    : Selection.GetSelected<GameObject>().ToList();
+
                 if (gos.Count > 1)
                     GameObjectInspector.DrawMulti(paper, font, gos);
                 else
@@ -292,14 +449,15 @@ public class InspectorPanel : DockPanel
             }
 
             // Multi-selection summary (GameObjects already get a full multi-object inspector above)
-            if (Selection.Count > 1 && active is not GameObject)
+            if (currentCount > 1 && active is not GameObject)
             {
                 Origami.Header(paper, "insp_h_multi", Loc.Get("inspector.selection")).Underline().Show();
-                Origami.Label(paper, "insp_multi_count", $"{Selection.Count} {Loc.Get("inspector.objects_selected")}").Show();
+                Origami.Label(paper, "insp_multi_count", $"{currentCount} {Loc.Get("inspector.objects_selected")}").Show();
 
-                for (int i = 0; i < Selection.Count && i < 20; i++)
+                var list = _isLocked ? _lockedSelected : Selection.Selected;
+                for (int i = 0; i < list.Count && i < 20; i++)
                 {
-                    var obj = Selection.Selected[i];
+                    var obj = list[i];
                     string name = obj switch
                     {
                         ContentItem ci => $"{(ci.IsFolder ? EditorIcons.Folder : GetExtensionIcon(Path.GetExtension(ci.Name).ToLowerInvariant()))} {ci.Name}",
@@ -309,8 +467,8 @@ public class InspectorPanel : DockPanel
                     Origami.Label(paper, $"insp_sel_{i}", name).Show();
                 }
 
-                if (Selection.Count > 20)
-                    Origami.Label(paper, "insp_more", Loc.Get("inspector.and_more", new { count = Selection.Count - 20 })).Show();
+                if (currentCount > 20)
+                    Origami.Label(paper, "insp_more", Loc.Get("inspector.and_more", new { count = currentCount - 20 })).Show();
             }
 
             paper.Box("insp_bottom_pad").Height(20);
@@ -324,13 +482,16 @@ public class InspectorPanel : DockPanel
     /// While a single GameObject is selected and a script asset that resolves to a component type is
     /// being dragged, overlays the inspector with a drop target that adds that component on drop.
     /// </summary>
-    private static void DrawScriptComponentDropZone(Paper paper, Scribe.FontFile font, float width, float height)
+    private void DrawScriptComponentDropZone(Paper paper, Scribe.FontFile font, float width, float height)
     {
         if (!DragDrop.IsDragging && !DragDrop.IsDropFrame) return;
         if (DragDrop.Payload is not AssetDragPayload payload) return;
 
-        var go = Selection.ActiveObject as GameObject;
-        if (go == null || Selection.GetSelected<GameObject>().Count() != 1) return;
+        var go = (_isLocked ? _lockedTarget : Selection.ActiveObject) as GameObject;
+        int count = _isLocked
+            ? _lockedSelected.OfType<GameObject>().Count()
+            : Selection.GetSelected<GameObject>().Count();
+        if (go == null || count != 1) return;
 
         Type? componentType = Prowl.Editor.Projects.Scripting.ScriptComponentResolver.ResolveComponentType(payload);
         if (componentType == null) return;

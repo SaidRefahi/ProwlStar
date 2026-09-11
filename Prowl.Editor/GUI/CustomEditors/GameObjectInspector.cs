@@ -61,13 +61,31 @@ public static class GameObjectInspector
     private static bool IsExpanded(string id) => !_collapsedSections.Contains(id);
     private static void ToggleSection(string id) { if (!_collapsedSections.Add(id)) _collapsedSections.Remove(id); }
 
+    public static void CollapseAll(GameObject go)
+    {
+        _collapsedSections.Add($"gi_transform_{go.Identifier}");
+        foreach (var comp in go.GetComponents<MonoBehaviour>())
+            _collapsedSections.Add($"gi_comp_{comp.Identifier}");
+    }
+
+    public static void ExpandAll(GameObject go)
+    {
+        _collapsedSections.Remove($"gi_transform_{go.Identifier}");
+        foreach (var comp in go.GetComponents<MonoBehaviour>())
+            _collapsedSections.Remove($"gi_comp_{comp.Identifier}");
+    }
+
     private static bool SectionHeader(Paper paper, Prowl.Scribe.FontFile font, string id,
-        string glyph, string title, Color titleColor, Action? trailing = null, Action? onDragStart = null)
+        string glyph, string title, Color titleColor, Action? trailing = null, Action? onDragStart = null,
+        Action<ContextBuilder>? onContextMenu = null)
     {
         bool expanded = IsExpanded(id);
         var semi = EditorTheme.FontSemiBold ?? font;
         using (paper.Row($"{id}_head").Height(30).Padding(10, 8, 0, 0).RowBetween(7).Enter())
         {
+            if (onContextMenu != null)
+                Origami.RightClickMenu(paper, $"{id}_ctx", onContextMenu);
+
             var clickRow = paper.Row($"{id}_hclick").Width(UnitValue.Stretch()).Height(30).RowBetween(7)
                 .Hovered.BackgroundColor(Color.FromArgb(13, EditorTheme.Purple400)).End()
                 .OnClick(id, (i, _) => ToggleSection(i));
@@ -427,6 +445,61 @@ public static class GameObjectInspector
     //  Transform
     // ================================================================
 
+    private static void BuildTransformContextMenu(ContextBuilder builder, GameObject go)
+    {
+        builder.Item(Loc.Get("inspector.reset"), () => ResetTransform(go), icon: EditorIcons.ArrowRotateRight);
+
+        builder.Separator();
+
+        builder.Item(Loc.Get("inspector.copy_transform"), () =>
+        {
+            var t = go.Transform;
+            var json = FormattableString.Invariant($"{t.LocalPosition.X},{t.LocalPosition.Y},{t.LocalPosition.Z};{t.LocalEulerAngles.X},{t.LocalEulerAngles.Y},{t.LocalEulerAngles.Z};{t.LocalScale.X},{t.LocalScale.Y},{t.LocalScale.Z}");
+            Input.Clipboard = "ProwlTransform:" + json;
+        }, icon: EditorIcons.Copy);
+
+        builder.Item(Loc.Get("inspector.paste_transform"), () =>
+        {
+            string clip = Input.Clipboard ?? "";
+            if (!clip.StartsWith("ProwlTransform:")) return;
+            string data = clip["ProwlTransform:".Length..];
+            string[] parts = data.Split(';');
+            if (parts.Length != 3) return;
+
+            var posParts = parts[0].Split(',');
+            var rotParts = parts[1].Split(',');
+            var scaleParts = parts[2].Split(',');
+
+            if (float.TryParse(posParts[0], System.Globalization.CultureInfo.InvariantCulture, out float px) &&
+                float.TryParse(posParts[1], System.Globalization.CultureInfo.InvariantCulture, out float py) &&
+                float.TryParse(posParts[2], System.Globalization.CultureInfo.InvariantCulture, out float pz) &&
+                float.TryParse(rotParts[0], System.Globalization.CultureInfo.InvariantCulture, out float rx) &&
+                float.TryParse(rotParts[1], System.Globalization.CultureInfo.InvariantCulture, out float ry) &&
+                float.TryParse(rotParts[2], System.Globalization.CultureInfo.InvariantCulture, out float rz) &&
+                float.TryParse(scaleParts[0], System.Globalization.CultureInfo.InvariantCulture, out float sx) &&
+                float.TryParse(scaleParts[1], System.Globalization.CultureInfo.InvariantCulture, out float sy) &&
+                float.TryParse(scaleParts[2], System.Globalization.CultureInfo.InvariantCulture, out float sz))
+            {
+                var newPos = new Float3(px, py, pz);
+                var newRot = new Float3(rx, ry, rz);
+                var newScale = new Float3(sx, sy, sz);
+
+                var t = go.Transform;
+                var oldPos = t.LocalPosition;
+                var oldRot = t.LocalEulerAngles;
+                var oldScale = t.LocalScale;
+
+                Undo.RegisterAction("Paste Transform Values",
+                    () => { t.LocalPosition = oldPos; t.LocalEulerAngles = oldRot; t.LocalScale = oldScale; },
+                    () => { t.LocalPosition = newPos; t.LocalEulerAngles = newRot; t.LocalScale = newScale; });
+
+                t.LocalPosition = newPos;
+                t.LocalEulerAngles = newRot;
+                t.LocalScale = newScale;
+            }
+        }, icon: EditorIcons.ClipboardCheck, enabled: (Input.Clipboard ?? "").StartsWith("ProwlTransform:"));
+    }
+
     private static void DrawTransform(Paper paper, Prowl.Scribe.FontFile font, GameObject go)
     {
         var t = go.Transform;
@@ -438,8 +511,9 @@ public static class GameObjectInspector
                 EditorGUI.HeaderIconButton(paper, "gi_tf_reset", EditorIcons.ArrowRotateRight, () => ResetTransform(go));
                 EditorGUI.HeaderIconButton(paper, "gi_tf_dots", EditorIcons.EllipsisVertical, () =>
                     Origami.ContextMenu((float)paper.PointerPos.X, (float)paper.PointerPos.Y, b =>
-                        b.Item(Loc.Get("inspector.reset"), () => ResetTransform(go), icon: EditorIcons.ArrowRotateRight)));
-            });
+                        BuildTransformContextMenu(b, go)));
+            },
+            onContextMenu: b => BuildTransformContextMenu(b, go));
         if (!expanded) return;
 
         // Position
@@ -874,7 +948,8 @@ public static class GameObjectInspector
                         Origami.ContextMenu((float)paper.PointerPos.X, (float)paper.PointerPos.Y, b =>
                             BuildComponentContextMenu(b, go, comp, capturedI)));
                 },
-                onDragStart: () => DragDrop.StartDrag(new ComponentDragPayload(go, comp)));
+                onDragStart: () => DragDrop.StartDrag(new ComponentDragPayload(go, comp)),
+                onContextMenu: b => BuildComponentContextMenu(b, go, comp, capturedI));
 
             if (expanded)
             {
@@ -963,7 +1038,7 @@ public static class GameObjectInspector
         go.RemoveComponent(comp);
     }
 
-    private static void BuildComponentContextMenu(ContextBuilder builder, GameObject go, MonoBehaviour comp, int index)
+    public static void BuildComponentContextMenu(ContextBuilder builder, GameObject go, MonoBehaviour comp, int index)
     {
         // On an instance, what this component is supposed to be is whatever the prefab says, so Reset
         // means go back to that. Everywhere else there is nothing to go back to but the values a new
@@ -975,6 +1050,15 @@ public static class GameObjectInspector
             if (provided) PrefabUtility.RevertComponentOverrides(go, comp);
             else PrefabUtility.ResetComponentToDefaults(go, comp);
         }, icon: EditorIcons.ArrowsRotate, enabled: !provided || PrefabUtility.HasComponentOverrides(go, comp));
+
+        if (comp is BoxCollider box)
+        {
+            builder.Item(Loc.Get("collider.fit_to_mesh"), () =>
+            {
+                Undo.Snapshot(box);
+                box.AutoFitToMesh();
+            }, icon: EditorIcons.Expand);
+        }
 
         // Pushing one component back to the prefab, at the scale the user is working at rather than
         // the whole instance at once.
@@ -998,6 +1082,10 @@ public static class GameObjectInspector
             RemoveComponentWithUndo(comp);
         }, icon: EditorIcons.Trash, enabled: comp.CanDestroy());
 
+        builder.Item(Loc.Get("inspector.duplicate_component"), () =>
+        {
+            ComponentClipboard.Duplicate(comp);
+        }, icon: EditorIcons.Copy);
 
         builder.Separator();
 
@@ -1017,6 +1105,8 @@ public static class GameObjectInspector
         builder.Separator();
 
         var moveCompId = comp.Identifier;
+        int compCount = go.GetComponents<MonoBehaviour>().Count();
+
         builder.Item(Loc.Get("inspector.move_up"), () =>
         {
             if (index > 0)
@@ -1031,12 +1121,44 @@ public static class GameObjectInspector
 
         builder.Item(Loc.Get("inspector.move_down"), () =>
         {
-            var oldIdx = index; var newIdx = index + 1;
-            Undo.RegisterAction("Move Component Down",
-                () => { var c = Undo.FindComponent(moveCompId); if (c.IsValid()) c.SetSiblingIndex(oldIdx); },
-                () => { var c = Undo.FindComponent(moveCompId); if (c.IsValid()) c.SetSiblingIndex(newIdx); });
-            comp.SetSiblingIndex(newIdx);
-        }, icon: EditorIcons.ArrowDown);
+            if (index < compCount - 1)
+            {
+                var oldIdx = index; var newIdx = index + 1;
+                Undo.RegisterAction("Move Component Down",
+                    () => { var c = Undo.FindComponent(moveCompId); if (c.IsValid()) c.SetSiblingIndex(oldIdx); },
+                    () => { var c = Undo.FindComponent(moveCompId); if (c.IsValid()) c.SetSiblingIndex(newIdx); });
+                comp.SetSiblingIndex(newIdx);
+            }
+        }, icon: EditorIcons.ArrowDown, enabled: index < compCount - 1);
+
+        builder.Item(Loc.Get("inspector.move_to_top"), () =>
+        {
+            if (index > 0)
+            {
+                var oldIdx = index; var newIdx = 0;
+                Undo.RegisterAction("Move Component to Top",
+                    () => { var c = Undo.FindComponent(moveCompId); if (c.IsValid()) c.SetSiblingIndex(oldIdx); },
+                    () => { var c = Undo.FindComponent(moveCompId); if (c.IsValid()) c.SetSiblingIndex(newIdx); });
+                comp.SetSiblingIndex(newIdx);
+            }
+        }, icon: EditorIcons.AnglesUp, enabled: index > 0);
+
+        builder.Item(Loc.Get("inspector.move_to_bottom"), () =>
+        {
+            if (index < compCount - 1)
+            {
+                var oldIdx = index; var newIdx = compCount - 1;
+                Undo.RegisterAction("Move Component to Bottom",
+                    () => { var c = Undo.FindComponent(moveCompId); if (c.IsValid()) c.SetSiblingIndex(oldIdx); },
+                    () => { var c = Undo.FindComponent(moveCompId); if (c.IsValid()) c.SetSiblingIndex(newIdx); });
+                comp.SetSiblingIndex(newIdx);
+            }
+        }, icon: EditorIcons.AnglesDown, enabled: index < compCount - 1);
+
+        builder.Separator();
+
+        builder.Item(Loc.Get("inspector.collapse_all"), () => CollapseAll(go), icon: EditorIcons.ChevronUp);
+        builder.Item(Loc.Get("inspector.expand_all"), () => ExpandAll(go), icon: EditorIcons.ChevronDown);
 
         builder.Separator();
 
@@ -1550,6 +1672,15 @@ public static class GameObjectInspector
         var addedComp = go.AddComponent(type);
         if (addedComp != null)
         {
+            try
+            {
+                addedComp.Reset();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Error calling Reset() on {addedComp.GetType().Name}: {ex}");
+            }
+
             var compId = addedComp.Identifier;
             var goId = go.Identifier;
             var serialized = Echo.Serializer.Serialize(addedComp.GetType(), addedComp);
