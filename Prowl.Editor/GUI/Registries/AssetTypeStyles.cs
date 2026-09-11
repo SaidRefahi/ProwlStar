@@ -132,7 +132,9 @@ public static class AssetTypeStyles
             [".mp4"] = new() { Icon = EditorIcons.Image_I, Color = Red },
             [".mov"] = new() { Icon = EditorIcons.Image_I, Color = Red },
             [".mkv"] = new() { Icon = EditorIcons.Image_I, Color = Red },
-            [".webm"] = new() { Icon = EditorIcons.Image_I, Color = Red },
+            // Animation & Rig.
+            [".anim"] = new() { Icon = EditorIcons.Film_I, Color = Cyan },
+            [".skeleton"] = new() { Icon = EditorIcons.LayerGroup_I, Color = Cyan },
             // Archives / packages.
             [".zip"] = new() { Icon = EditorIcons.LayerGroup_I, Color = Gray },
             [".prowlpackage"] = new() { Icon = EditorIcons.LayerGroup_I, Color = Purple },

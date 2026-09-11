@@ -271,12 +271,18 @@ internal static class ClayBackedImporter
             anim.Clips = animations.Select(c => new AssetRef<PAnim>(c)).ToList();
         }
 
+        // 6b. Skeletons.
+        var skeletons = new List<SkeletonAsset>(clayModel.Skins.Count);
+        for (int s = 0; s < clayModel.Skins.Count; s++)
+            skeletons.Add(BuildSkeleton(clayModel.Skins[s], clayModel, modelName, s));
+
         return new ModelImportResult
         {
             RootGO = rootGO,
             Meshes = meshes,
             Materials = materials,
             Animations = animations,
+            Skeletons = skeletons,
         };
     }
 
@@ -727,4 +733,53 @@ internal static class ClayBackedImporter
         });
     }
 
+    internal static SkeletonAsset BuildSkeleton(Clay.Skin clayskin, Clay.Model clayModel, string modelName, int skinIndex)
+    {
+        var skeleton = new SkeletonAsset
+        {
+            Name = !string.IsNullOrEmpty(clayskin.Name)
+                ? clayskin.Name
+                : (clayModel.Skins.Count > 1 ? $"{modelName}_Skeleton{skinIndex}" : $"{modelName}_Skeleton")
+        };
+
+        var nodeToSkeletonBone = new Dictionary<int, int>();
+        for (int b = 0; b < clayskin.BoneNodeIndices.Length; b++)
+            nodeToSkeletonBone[clayskin.BoneNodeIndices[b]] = b;
+
+        var bones = new List<SkeletonBone>(clayskin.BoneNodeIndices.Length);
+        var inverseBindPoses = clayskin.InverseBindPoses.ToArray();
+
+        for (int b = 0; b < clayskin.BoneNodeIndices.Length; b++)
+        {
+            int nodeIdx = clayskin.BoneNodeIndices[b];
+            var node = clayModel.Nodes[nodeIdx];
+            string boneName = string.IsNullOrEmpty(node.Name) ? $"Bone_{b}" : node.Name;
+
+            int parentBoneIndex = -1;
+            var p = node.Parent;
+            while (p != null)
+            {
+                if (nodeToSkeletonBone.TryGetValue(p.Index, out int pBoneIdx))
+                {
+                    parentBoneIndex = pBoneIdx;
+                    break;
+                }
+                p = p.Parent;
+            }
+
+            Float4x4 ibp = b < inverseBindPoses.Length ? inverseBindPoses[b] : Float4x4.Identity;
+
+            bones.Add(new SkeletonBone(
+                boneName,
+                parentBoneIndex,
+                node.LocalPosition,
+                node.LocalRotation,
+                node.LocalScale,
+                ibp
+            ));
+        }
+
+        skeleton.SetBones(bones);
+        return skeleton;
+    }
 }

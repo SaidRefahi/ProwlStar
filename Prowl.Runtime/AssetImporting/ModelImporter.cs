@@ -112,6 +112,7 @@ public class ModelImportResult
     public List<Mesh> Meshes = [];
     public List<Material> Materials = [];
     public List<AnimationClip> Animations = [];
+    public List<SkeletonAsset> Skeletons = [];
 }
 
 /// <summary>

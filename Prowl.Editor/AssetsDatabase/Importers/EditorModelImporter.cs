@@ -78,6 +78,9 @@ public class EditorModelImporter : AssetImporter
             for (int i = 0; i < data.Animations.Count; i++)
                 ctx.AddSubAsset(data.Animations[i].Name ?? $"Animation_{i}", data.Animations[i], SubAssetIdentity.Order);
 
+            for (int i = 0; i < data.Skeletons.Count; i++)
+                ctx.AddSubAsset(data.Skeletons[i].Name ?? $"Skeleton_{i}", data.Skeletons[i], SubAssetIdentity.Order);
+
             // Note: model-referenced textures (both external and embedded) are already fully
             // resolved by this point - materials carry AssetRefs, and any embedded texture is
             // already registered as a sub-asset - both as side effects of EditorModelTextureResolver

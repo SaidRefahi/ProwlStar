@@ -921,6 +921,7 @@ public class InspectorPanel : DockPanel
             Prowl.Runtime.Resources.Material => ".mat",
             Prowl.Runtime.Resources.Mesh => ".mesh",
             Prowl.Runtime.AnimationClip => ".anim",
+            Prowl.Runtime.SkeletonAsset => ".skeleton",
             Prowl.Runtime.Resources.Texture2D => ".png",
             _ => ".asset"
         };
