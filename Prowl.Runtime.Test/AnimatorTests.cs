@@ -2297,6 +2297,165 @@ public class AnimatorTests : RuntimeTestBase
         Assert.True(animator.Validate(out string? err));
         Assert.Null(err);
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  20. PR14: Exit Time, Any State & Dynamic Management Tests
+    // ════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Transition_WithHasExitTime_TriggersWhenTimeReached()
+    {
+        var (root, _) = CreateHierarchy();
+        var animator = root.AddComponent<Animator>();
+
+        var clipAttack = CreateClipWithPosition("Attack", "Bone1", Float3.Zero, Float3.One, 1.0f);
+        var clipIdle = CreateClipWithPosition("Idle", "Bone1", Float3.Zero, Float3.Zero, 1.0f);
+
+        animator.AddState(new AnimatorState("Attack", new AssetRef<AnimationClip>(clipAttack), loop: false));
+        animator.AddState(new AnimatorState("Idle", new AssetRef<AnimationClip>(clipIdle), loop: true));
+        animator.DefaultState = "Attack";
+
+        // Transition: Attack -> Idle when exit time reaches 1.0 (normalized)
+        animator.AddTransition(new AnimatorTransition("Attack", "Idle", 0.2f, hasExitTime: true, exitTime: 1.0f));
+        animator.OnEnable();
+
+        Assert.Equal("Attack", animator.CurrentState?.Name);
+
+        // Step 0.5s -> normalizedTime = 0.5 < 1.0 -> should not transition yet
+        animator.Update(0.5f);
+        Assert.False(animator.IsInTransition);
+        Assert.Equal("Attack", animator.CurrentState?.Name);
+
+        // Step another 0.6s -> total time = 1.1s >= 1.0s -> transition triggers!
+        animator.Update(0.6f);
+        Assert.True(animator.IsInTransition);
+        Assert.Equal("Idle", animator.TargetState?.Name);
+
+        // Advance past transition duration
+        animator.Update(0.3f);
+        Assert.False(animator.IsInTransition);
+        Assert.Equal("Idle", animator.CurrentState?.Name);
+    }
+
+    [Fact]
+    public void Transition_WithExitTimeAndCondition_RequiresBoth()
+    {
+        var (root, _) = CreateHierarchy();
+        var animator = root.AddComponent<Animator>();
+
+        var clipAttack = CreateClipWithPosition("Attack", "Bone1", Float3.Zero, Float3.One, 1.0f);
+        var clipCombo = CreateClipWithPosition("Combo", "Bone1", Float3.One, Float3.One, 1.0f);
+
+        animator.AddState(new AnimatorState("Attack", new AssetRef<AnimationClip>(clipAttack), loop: false));
+        animator.AddState(new AnimatorState("Combo", new AssetRef<AnimationClip>(clipCombo), loop: false));
+        animator.DefaultState = "Attack";
+
+        // Transition: Attack -> Combo when ExitTime >= 0.8 AND DoCombo == true
+        animator.AddTransition(new AnimatorTransition("Attack", "Combo", 0.1f, hasExitTime: true, exitTime: 0.8f,
+            new AnimatorCondition("DoCombo", AnimatorConditionMode.If)));
+
+        animator.OnEnable();
+
+        // Set condition true early at time 0.2s -> should NOT transition because ExitTime < 0.8
+        animator.SetBool("DoCombo", true);
+        animator.Update(0.2f);
+        Assert.False(animator.IsInTransition);
+        Assert.Equal("Attack", animator.CurrentState?.Name);
+
+        // Step past 0.8s (e.g. 0.7s more -> 0.9s total) -> both ExitTime and Condition met!
+        animator.Update(0.7f);
+        Assert.True(animator.IsInTransition);
+        Assert.Equal("Combo", animator.TargetState?.Name);
+    }
+
+    [Fact]
+    public void Transition_AnyState_TriggersFromAnyState()
+    {
+        var (root, _) = CreateHierarchy();
+        var animator = root.AddComponent<Animator>();
+
+        var clipA = CreateClipWithPosition("StateA", "Bone1", Float3.Zero, Float3.Zero, 1.0f);
+        var clipB = CreateClipWithPosition("StateB", "Bone1", Float3.Zero, Float3.Zero, 1.0f);
+        var clipHurt = CreateClipWithPosition("Hurt", "Bone1", Float3.One, Float3.One, 1.0f);
+
+        animator.AddState(new AnimatorState("StateA", new AssetRef<AnimationClip>(clipA)));
+        animator.AddState(new AnimatorState("StateB", new AssetRef<AnimationClip>(clipB)));
+        animator.AddState(new AnimatorState("Hurt", new AssetRef<AnimationClip>(clipHurt)));
+
+        // Global transition: Any State -> Hurt when IsHurt == true
+        animator.AddTransition(new AnimatorTransition("Any State", "Hurt", 0.1f,
+            new AnimatorCondition("IsHurt", AnimatorConditionMode.If)));
+
+        animator.OnEnable();
+        animator.Play("StateA", 0f);
+        Assert.Equal("StateA", animator.CurrentState?.Name);
+
+        // Trigger IsHurt while in StateA
+        animator.SetBool("IsHurt", true);
+        animator.Update(0.01f);
+        Assert.True(animator.IsInTransition);
+        Assert.Equal("Hurt", animator.TargetState?.Name);
+
+        // Complete transition
+        animator.Update(0.2f);
+        Assert.Equal("Hurt", animator.CurrentState?.Name);
+        animator.SetBool("IsHurt", false);
+
+        // Play StateB
+        animator.Play("StateB", 0f);
+        Assert.Equal("StateB", animator.CurrentState?.Name);
+
+        // Trigger IsHurt while in StateB
+        animator.SetBool("IsHurt", true);
+        animator.Update(0.01f);
+        Assert.True(animator.IsInTransition);
+        Assert.Equal("Hurt", animator.TargetState?.Name);
+    }
+
+    [Fact]
+    public void Animator_DynamicManagement_AddRemoveStatesLayersParameters()
+    {
+        var root = new GameObject("Root");
+        var animator = root.AddComponent<Animator>();
+
+        // 1. Parameters dynamic API
+        Assert.False(animator.HasParameter("Speed"));
+        animator.AddParameter(new AnimatorParameter { Name = "Speed", Type = AnimatorParameterType.Float });
+        Assert.True(animator.HasParameter("Speed"));
+        Assert.NotNull(animator.GetParameter("Speed"));
+
+        animator.RenameParameter("Speed", "MoveSpeed");
+        Assert.False(animator.HasParameter("Speed"));
+        Assert.True(animator.HasParameter("MoveSpeed"));
+
+        animator.RemoveParameter("MoveSpeed");
+        Assert.False(animator.HasParameter("MoveSpeed"));
+
+        // 2. States & Layers dynamic API
+        animator.EnsureBaseLayer();
+        var clip = CreateClipWithPosition("Walk", "Bone1", Float3.Zero, Float3.One);
+        animator.AddState("Walk", clip);
+        Assert.NotNull(animator.GetState("Walk"));
+
+        var trans = new AnimatorTransition("Walk", "Idle", 0.2f);
+        animator.AddTransition(trans);
+        Assert.Single(animator.Transitions);
+
+        animator.RemoveTransition(trans);
+        Assert.Empty(animator.Transitions);
+
+        animator.RemoveState("Walk");
+        Assert.Null(animator.GetState("Walk"));
+
+        // Layers
+        var secondLayer = new AnimatorLayer("UpperBody", 0.8f);
+        animator.AddLayer(secondLayer);
+        Assert.Equal(2, animator.Layers.Count);
+        Assert.Equal(secondLayer, animator.GetLayer("UpperBody"));
+
+        animator.RemoveLayer(1);
+        Assert.Single(animator.Layers);
+    }
 }
 
 

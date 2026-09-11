@@ -466,8 +466,95 @@ public class Animator : MonoBehaviour
     public void AddState(AnimatorState state) => EnsureBaseLayer().AddState(state);
     public void AddState(string name, AnimationClip clip) => AddState(new AnimatorState { Name = name, Clip = new AssetRef<AnimationClip>(clip) });
     public void AddState(string name, AssetRef<AnimationClip> clip) => AddState(new AnimatorState { Name = name, Clip = clip });
+    public void AddState(string name, BlendTree blendTree, int layerIndex = 0)
+    {
+        var layer = GetLayer(layerIndex) ?? EnsureBaseLayer();
+        layer.AddState(new AnimatorState(name, blendTree));
+    }
+    public bool RemoveState(string name, int layerIndex = 0)
+    {
+        var layer = GetLayer(layerIndex);
+        return layer != null && layer.RemoveState(name);
+    }
     public void AddTransition(AnimatorTransition transition) => EnsureBaseLayer().AddTransition(transition);
+    public bool RemoveTransition(AnimatorTransition transition, int layerIndex = 0)
+    {
+        var layer = GetLayer(layerIndex);
+        return layer != null && layer.RemoveTransition(transition);
+    }
+    public bool RemoveLayer(int index)
+    {
+        if (index > 0 && index < Layers.Count)
+        {
+            Layers.RemoveAt(index);
+            return true;
+        }
+        return false;
+    }
+    public bool RemoveLayer(string name)
+    {
+        for (int i = 1; i < Layers.Count; i++)
+        {
+            if (Layers[i].Name == name)
+            {
+                Layers.RemoveAt(i);
+                return true;
+            }
+        }
+        return false;
+    }
     public void AddParameter(AnimatorParameter parameter) => Parameters.Add(parameter);
+    public bool HasParameter(string name)
+    {
+        for (int i = 0; i < Parameters.Count; i++)
+        {
+            if (Parameters[i].Name == name) return true;
+        }
+        return false;
+    }
+    public AnimatorParameter? GetParameter(string name)
+    {
+        for (int i = 0; i < Parameters.Count; i++)
+        {
+            if (Parameters[i].Name == name) return Parameters[i];
+        }
+        return null;
+    }
+    public bool RemoveParameter(string name)
+    {
+        _paramValues.Remove(name);
+        for (int i = 0; i < Parameters.Count; i++)
+        {
+            if (Parameters[i].Name == name)
+            {
+                Parameters.RemoveAt(i);
+                return true;
+            }
+        }
+        return false;
+    }
+    public bool RenameParameter(string oldName, string newName)
+    {
+        if (string.IsNullOrEmpty(newName) || oldName == newName) return false;
+        var p = GetParameter(oldName);
+        if (p == null) return false;
+        p.Name = newName;
+        if (_paramValues.Remove(oldName, out var val))
+            _paramValues[newName] = val;
+        return true;
+    }
+    public void ResetAllTriggers()
+    {
+        foreach (var kvp in _paramValues)
+        {
+            if (kvp.Value.Type == AnimatorParameterType.Trigger)
+            {
+                var val = kvp.Value;
+                val.TriggerVal = false;
+                _paramValues[kvp.Key] = val;
+            }
+        }
+    }
 
     public void Play(string stateName, float transitionDuration = -1f) => Play(stateName, 0, transitionDuration);
 
@@ -560,10 +647,6 @@ public class Animator : MonoBehaviour
             var layer = Layers[k];
             if (!layer.IsPlaying || layer.CurrentState == null) continue;
 
-            // Check automatic transitions on this layer
-            if (!layer.IsInTransition)
-                CheckAutomaticTransitions(layer);
-
             float stateDuration = layer.CurrentState.GetDuration();
             float effectiveSpeed = Speed * layer.CurrentState.Speed;
 
@@ -590,7 +673,18 @@ public class Animator : MonoBehaviour
             else
             {
                 layer.CurrentTime = AdvanceTime(layer.CurrentTime, deltaTime * effectiveSpeed, stateDuration, layer.CurrentState.Wrap, layer.CurrentState.Loop);
-                EvaluateSingleLayerPose(layer, k);
+
+                // Check automatic transitions on this layer
+                CheckAutomaticTransitions(layer);
+
+                if (layer.IsInTransition && layer.TargetState != null)
+                {
+                    EvaluateBlendedLayerPoses(layer, k, 0f);
+                }
+                else
+                {
+                    EvaluateSingleLayerPose(layer, k);
+                }
             }
 
             if (_layerPoses[k] != null && _layerPoses[k].Length > maxCombinedBones)
@@ -892,22 +986,43 @@ public class Animator : MonoBehaviour
     {
         if (layer.CurrentState == null || layer.IsInTransition) return;
 
+        float stateDuration = layer.CurrentState.GetDuration();
+        float normalizedTime = stateDuration > 1e-4f ? layer.CurrentTime / stateDuration : 1f;
+
         var transitions = CollectionsMarshal.AsSpan(layer.Transitions);
         for (int i = 0; i < transitions.Length; i++)
         {
             var trans = transitions[i];
-            if (trans.Conditions.Count == 0) continue;
 
-            if (!string.IsNullOrEmpty(trans.SourceState) && trans.SourceState != layer.CurrentState.Name)
+            bool isAnyState = string.IsNullOrEmpty(trans.SourceState) || trans.SourceState == "Any State";
+            if (!isAnyState && trans.SourceState != layer.CurrentState.Name)
                 continue;
 
             var targetState = layer.GetState(trans.TargetState);
-            if (targetState == null || targetState == layer.CurrentState)
+            if (targetState == null)
                 continue;
 
-            if (EvaluateConditions(trans.Conditions))
+            if (targetState == layer.CurrentState && !trans.CanTransitionToSelf)
+                continue;
+
+            if (trans.HasExitTime && normalizedTime < trans.ExitTime)
+                continue;
+
+            bool conditionsMet;
+            if (trans.Conditions.Count > 0)
             {
-                ConsumeTriggers(trans.Conditions);
+                conditionsMet = EvaluateConditions(trans.Conditions);
+            }
+            else
+            {
+                conditionsMet = trans.HasExitTime;
+            }
+
+            if (conditionsMet)
+            {
+                if (trans.Conditions.Count > 0)
+                    ConsumeTriggers(trans.Conditions);
+
                 layer.Play(trans.TargetState, trans.Duration);
                 break;
             }

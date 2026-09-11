@@ -27,8 +27,23 @@ public sealed class AnimatorState
     /// <summary>Whether this state should loop continuously.</summary>
     public bool Loop { get; set; } = true;
 
+    /// <summary>Optional tag for categorization and gameplay queries.</summary>
+    public string Tag { get; set; } = "";
+
     /// <summary>Wrap mode configuration. If not explicitly changed, defaults according to <see cref="Loop"/>.</summary>
     public AnimationWrapMode Wrap { get; set; } = AnimationWrapMode.Loop;
+
+    public void SetClip(AssetRef<AnimationClip> clip)
+    {
+        Clip = clip;
+        BlendTree = null;
+    }
+
+    public void SetBlendTree(BlendTree tree)
+    {
+        BlendTree = tree;
+        Clip = default;
+    }
 
     public AnimatorState() { }
 

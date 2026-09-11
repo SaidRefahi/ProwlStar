@@ -41,6 +41,15 @@ public sealed class AnimatorLayer
     public float TransitionTime { get; internal set; }
     public float TransitionDuration { get; internal set; }
 
+    public float TransitionProgress
+    {
+        get
+        {
+            if (!IsInTransition || TransitionDuration <= 0f) return 1f;
+            return Math.Clamp(TransitionTime / TransitionDuration, 0f, 1f);
+        }
+    }
+
     public AnimatorLayer() { }
 
     public AnimatorLayer(string name, float weight = 1f, AvatarMask? mask = null)
@@ -62,7 +71,39 @@ public sealed class AnimatorLayer
     }
 
     public void AddState(AnimatorState state) => States.Add(state);
+
+    public bool RemoveState(string name)
+    {
+        for (int i = 0; i < States.Count; i++)
+        {
+            if (States[i].Name == name)
+            {
+                var st = States[i];
+                States.RemoveAt(i);
+                Transitions.RemoveAll(t => t.SourceState == name || t.TargetState == name);
+                if (CurrentState == st) CurrentState = null;
+                if (TargetState == st) TargetState = null;
+                if (DefaultState == name) DefaultState = States.Count > 0 ? States[0].Name : "";
+                return true;
+            }
+        }
+        return false;
+    }
+
     public void AddTransition(AnimatorTransition transition) => Transitions.Add(transition);
+
+    public bool RemoveTransition(AnimatorTransition transition) => Transitions.Remove(transition);
+
+    public List<AnimatorTransition> GetTransitionsFrom(string stateName)
+    {
+        var list = new List<AnimatorTransition>();
+        for (int i = 0; i < Transitions.Count; i++)
+        {
+            if (Transitions[i].SourceState == stateName)
+                list.Add(Transitions[i]);
+        }
+        return list;
+    }
 
     public AnimatorState? ResolveDefaultState()
     {
@@ -193,9 +234,8 @@ public sealed class AnimatorLayer
                 errors.Add($"Transition at index {i} is null.");
                 continue;
             }
-            if (string.IsNullOrWhiteSpace(tr.SourceState))
-                errors.Add($"Transition at index {i} has empty SourceState.");
-            else if (!stateNames.Contains(tr.SourceState))
+            bool isAnyState = string.IsNullOrWhiteSpace(tr.SourceState) || tr.SourceState == "Any State";
+            if (!isAnyState && !stateNames.Contains(tr.SourceState))
                 errors.Add($"Transition SourceState '{tr.SourceState}' does not exist on layer '{Name}'.");
 
             if (string.IsNullOrWhiteSpace(tr.TargetState))
