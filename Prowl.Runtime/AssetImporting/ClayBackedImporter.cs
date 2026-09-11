@@ -264,17 +264,35 @@ internal static class ClayBackedImporter
             foreach (var clip in clayModel.AnimationClips)
                 animations.Add(BuildAnimationClip(clip, clayModel, nodeGOs, rootGO, settings.AnimationWrapMode));
 
-        if (animations.Count > 0)
-        {
-            var anim = rootGO.AddComponent<AnimationComponent>();
-            anim.DefaultClip = new AssetRef<PAnim>(animations[0]);
-            anim.Clips = animations.Select(c => new AssetRef<PAnim>(c)).ToList();
-        }
-
         // 6b. Skeletons.
         var skeletons = new List<SkeletonAsset>(clayModel.Skins.Count);
         for (int s = 0; s < clayModel.Skins.Count; s++)
             skeletons.Add(BuildSkeleton(clayModel.Skins[s], clayModel, modelName, s));
+
+        // 6c. Native Engine Animation System:
+        // When a model contains a skeleton and/or animation clips, the engine natively equips
+        // the character hierarchy with its Animator evaluator.
+        if (skeletons.Count > 0 || animations.Count > 0)
+        {
+            var animator = rootGO.AddComponent<Animator>();
+            if (skeletons.Count > 0)
+                animator.Skeleton = new AssetRef<SkeletonAsset>(skeletons[0]);
+
+            if (animations.Count > 0)
+            {
+                for (int i = 0; i < animations.Count; i++)
+                {
+                    string stateName = string.IsNullOrWhiteSpace(animations[i].Name) ? $"Clip_{i}" : animations[i].Name;
+                    animator.AddState(stateName, animations[i]);
+                }
+                if (animator.Layers.Count > 0 && animator.Layers[0].States.Count > 0)
+                    animator.DefaultState = animator.Layers[0].States[0].Name;
+
+                var anim = rootGO.AddComponent<AnimationComponent>();
+                anim.DefaultClip = new AssetRef<PAnim>(animations[0]);
+                anim.Clips = animations.Select(c => new AssetRef<PAnim>(c)).ToList();
+            }
+        }
 
         return new ModelImportResult
         {

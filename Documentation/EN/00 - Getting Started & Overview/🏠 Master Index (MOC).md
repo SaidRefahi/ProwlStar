@@ -82,3 +82,7 @@ This Obsidian vault is structured as an interconnected knowledge graph using wik
 ### 09. [[📚 Runtime Classes Cheat Sheet|Quick API Reference]]
 - [[📚 Runtime Classes Cheat Sheet]]: Tabular overview of classes, namespaces, and core methods.
 - [[🔍 Essential Methods & Properties]]: Fast-lookup reference for daily development.
+
+### 10. [[🎬 Animation System & Animator|Animation System]]
+- [[🎬 Animation System & Animator]]: Native skeletal animation pipeline, `SkeletonAsset`, `Animator`, Blend Trees, Layers, Humanoid Retargeting, Two-Bone IK, and Root Motion.
+

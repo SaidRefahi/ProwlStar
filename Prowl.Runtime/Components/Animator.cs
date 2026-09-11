@@ -464,6 +464,8 @@ public class Animator : MonoBehaviour
     public AnimatorState? ResolveDefaultState() => EnsureBaseLayer().ResolveDefaultState();
     public AnimatorState? GetState(string name) => EnsureBaseLayer().GetState(name);
     public void AddState(AnimatorState state) => EnsureBaseLayer().AddState(state);
+    public void AddState(string name, AnimationClip clip) => AddState(new AnimatorState { Name = name, Clip = new AssetRef<AnimationClip>(clip) });
+    public void AddState(string name, AssetRef<AnimationClip> clip) => AddState(new AnimatorState { Name = name, Clip = clip });
     public void AddTransition(AnimatorTransition transition) => EnsureBaseLayer().AddTransition(transition);
     public void AddParameter(AnimatorParameter parameter) => Parameters.Add(parameter);
 

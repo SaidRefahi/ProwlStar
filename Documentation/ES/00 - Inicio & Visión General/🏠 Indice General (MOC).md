@@ -82,3 +82,7 @@ Esta bóveda de Obsidian está estructurada como una red de conocimiento interco
 ### 09. [[📚 Cheat Sheet de Clases Runtime|Referencia de API Rápida]]
 - [[📚 Cheat Sheet de Clases Runtime]]: Resumen tabular de clases, namespaces y usos frecuentes.
 - [[🔍 Métodos y Propiedades Esenciales]]: Métodos de invocación rápida para desarrollo diario.
+
+### 10. [[🎬 Sistema de Animación y Animator|Sistema de Animación]]
+- [[🎬 Sistema de Animación y Animator]]: Pipeline nativo de animación esquelética, `SkeletonAsset`, `Animator`, Blend Trees, Layers, Retargeting Humanoide, Two-Bone IK y Root Motion.
+

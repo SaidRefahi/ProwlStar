@@ -179,4 +179,22 @@ public class HumanoidEditorToolingTests
         Assert.Equal(tgtSkel.BoneCount, targetPoses.Length);
         Assert.Equal(armRot, targetPoses[7].Rotation);
     }
+
+    [Fact]
+    public void NativeAnimation_ModelWithSkeletonAndClips_HasAnimatorConfigured()
+    {
+        var rootGO = new GameObject("Character");
+        var skel = CreateMixamoStyleSkeleton();
+        var clip = new AnimationClip { Name = "Idle", Duration = 1.0f };
+
+        var animator = rootGO.AddComponent<Animator>();
+        animator.Skeleton = new AssetRef<SkeletonAsset>(skel);
+        animator.AddState("Idle", clip);
+        animator.DefaultState = "Idle";
+
+        Assert.NotNull(rootGO.GetComponent<Animator>());
+        Assert.Equal("Idle", animator.DefaultState);
+        Assert.Single(animator.Layers[0].States);
+        Assert.True(animator.Validate(out List<string> errors), string.Join("; ", errors));
+    }
 }
